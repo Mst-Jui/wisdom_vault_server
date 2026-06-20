@@ -42,9 +42,10 @@ async function run() {
     const commentsCollection = db.collection("comments");
     const reportsCollection = db.collection("lessonsReports");
 
-    
+    // =========================================================
     // LESSONS
-   
+    // =========================================================
+
     // Create lesson
     app.post("/api/lessons", async (req, res) => {
       try {
@@ -125,6 +126,31 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to fetch lessons",
+        });
+      }
+    });
+
+    // Get all lessons created by a specific user (for My Lessons dashboard page)
+    // IMPORTANT: must be declared BEFORE "/api/lessons/:id" to avoid route collision
+    app.get("/api/lessons/user/:creatorId", async (req, res) => {
+      try {
+        const { creatorId } = req.params;
+
+        const lessons = await lessonsCollection
+          .find({ creatorId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send({
+          success: true,
+          message: "User lessons fetched successfully",
+          data: lessons,
+        });
+      } catch (error) {
+        console.error("Fetch user lessons error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch user lessons",
         });
       }
     });
@@ -267,9 +293,135 @@ async function run() {
       }
     });
 
-    
+    // Update lesson — owner only (full edit form, or quick toggle of visibility/accessLevel)
+    app.patch("/api/lessons/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { userId, ...updateData } = req.body;
+        const lessonObjectId = toObjectId(id);
+
+        if (!lessonObjectId) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid lesson id",
+          });
+        }
+
+        const lesson = await lessonsCollection.findOne({
+          _id: lessonObjectId,
+        });
+
+        if (!lesson) {
+          return res.status(404).send({
+            success: false,
+            message: "Lesson not found",
+          });
+        }
+
+        // Only the lesson owner (or an admin, checked via userId + role lookup) can update
+        let isAdmin = false;
+        if (userId) {
+          const requester = await usersCollection.findOne({ _id: toObjectId(userId) });
+          isAdmin = requester?.role === "admin";
+        }
+
+        if (lesson.creatorId !== userId && !isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "You are not authorized to update this lesson",
+          });
+        }
+
+        // Never allow these fields to be overwritten through this route
+        delete updateData._id;
+        delete updateData.creatorId;
+        delete updateData.likes;
+        delete updateData.likesCount;
+        delete updateData.favoritesCount;
+        delete updateData.createdAt;
+
+        const updatedLesson = await lessonsCollection.findOneAndUpdate(
+          { _id: lessonObjectId },
+          { $set: { ...updateData, updatedAt: new Date() } },
+          { returnDocument: "after" }
+        );
+
+        res.status(200).send({
+          success: true,
+          message: "Lesson updated successfully",
+          data: updatedLesson,
+        });
+      } catch (error) {
+        console.error("Update lesson error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update lesson",
+        });
+      }
+    });
+
+    // Delete lesson — owner or admin only
+    app.delete("/api/lessons/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { userId } = req.query;
+        const lessonObjectId = toObjectId(id);
+
+        if (!lessonObjectId) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid lesson id",
+          });
+        }
+
+        const lesson = await lessonsCollection.findOne({
+          _id: lessonObjectId,
+        });
+
+        if (!lesson) {
+          return res.status(404).send({
+            success: false,
+            message: "Lesson not found",
+          });
+        }
+
+        let isAdmin = false;
+        if (userId) {
+          const requester = await usersCollection.findOne({ _id: toObjectId(userId) });
+          isAdmin = requester?.role === "admin";
+        }
+
+        if (lesson.creatorId !== userId && !isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "You are not authorized to delete this lesson",
+          });
+        }
+
+        await lessonsCollection.deleteOne({ _id: lessonObjectId });
+
+        // Clean up related data so nothing orphaned is left behind
+        await favoritesCollection.deleteMany({ lessonId: id });
+        await commentsCollection.deleteMany({ lessonId: id });
+        await reportsCollection.deleteMany({ lessonId: id });
+
+        res.status(200).send({
+          success: true,
+          message: "Lesson deleted successfully",
+        });
+      } catch (error) {
+        console.error("Delete lesson error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to delete lesson",
+        });
+      }
+    });
+
+    // =========================================================
     // FAVORITES
-    
+    // =========================================================
+
     // Toggle favorite (save / unsave) — keeps lessons.favoritesCount in sync
     app.post("/api/favorites/toggle", async (req, res) => {
       try {
@@ -389,9 +541,44 @@ async function run() {
               .toArray()
           : [];
 
+        // Attach creator name to each lesson for display in the table
+        const creatorIds = [
+          ...new Set(lessons.map((l) => l.creatorId).filter(Boolean)),
+        ];
+        const creatorObjectIds = creatorIds
+          .map((cid) => toObjectId(cid))
+          .filter(Boolean);
+
+        const creators = creatorObjectIds.length
+          ? await usersCollection
+              .find(
+                { _id: { $in: creatorObjectIds } },
+                { projection: { name: 1 } }
+              )
+              .toArray()
+          : [];
+
+        const creatorMap = creators.reduce((map, c) => {
+          map[c._id.toString()] = c.name;
+          return map;
+        }, {});
+
+        const lessonsWithCreator = lessons.map((lesson) => ({
+          ...lesson,
+          creatorName: creatorMap[lesson.creatorId] || "Unknown",
+        }));
+
+        // Preserve "most recently favorited" order from the favorites collection
+        const lessonOrder = favorites.map((f) => f.lessonId);
+        lessonsWithCreator.sort(
+          (a, b) =>
+            lessonOrder.indexOf(a._id.toString()) -
+            lessonOrder.indexOf(b._id.toString())
+        );
+
         res.status(200).send({
           success: true,
-          data: lessons,
+          data: lessonsWithCreator,
         });
       } catch (error) {
         console.error("Fetch favorites error:", error);
@@ -402,9 +589,11 @@ async function run() {
       }
     });
 
-    
+
+    // =========================================================
     // COMMENTS
-  
+    // =========================================================
+
     app.post("/api/comments", async (req, res) => {
       try {
         const { lessonId, userId, userName, userPhoto, text } = req.body;
@@ -441,8 +630,9 @@ async function run() {
       }
     });
 
-    
+    // =========================================================
     // REPORTS
+    // =========================================================
 
     app.post("/api/lessons/:id/report", async (req, res) => {
       try {
@@ -477,9 +667,10 @@ async function run() {
       }
     });
 
-   
+    // =========================================================
     // USERS
-  
+    // =========================================================
+
     app.get("/api/users/:email", async (req, res) => {
       try {
         const email = req.params.email;
@@ -505,7 +696,7 @@ async function run() {
       }
     });
 
-    // await client.db("admin").command({ ping: 1 });
+    await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
