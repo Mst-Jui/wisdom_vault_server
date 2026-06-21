@@ -756,6 +756,184 @@ async function run() {
       }
     });
 
+    // ---------------- ADMIN: MANAGE USERS ----------------
+
+    // Helper: verify the requester is an admin. Used by every admin-only route below.
+    const requireAdmin = async (requesterId) => {
+      const requesterObjectId = toObjectId(requesterId);
+      if (!requesterObjectId) return false;
+      const requester = await usersCollection.findOne({
+        _id: requesterObjectId,
+      });
+      return requester?.role === "admin";
+    };
+
+    // List all users with their total lessons created — admin only
+    app.get("/api/users", async (req, res) => {
+      try {
+        const { requesterId } = req.query;
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can view the user list",
+          });
+        }
+
+        const users = await usersCollection
+          .find({})
+          .project({ name: 1, email: 1, role: 1, image: 1, isPremium: 1 })
+          .sort({ name: 1 })
+          .toArray();
+
+        // Attach lesson count per user in one aggregation instead of N queries
+        const lessonCounts = await lessonsCollection
+          .aggregate([
+            { $group: { _id: "$creatorId", count: { $sum: 1 } } },
+          ])
+          .toArray();
+
+        const countMap = lessonCounts.reduce((map, item) => {
+          map[item._id] = item.count;
+          return map;
+        }, {});
+
+        const usersWithCounts = users.map((u) => ({
+          ...u,
+          totalLessonsCreated: countMap[u._id.toString()] || 0,
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: usersWithCounts,
+        });
+      } catch (error) {
+        console.error("Fetch users error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch users",
+        });
+      }
+    });
+
+    // Promote/demote a user's role — admin only, and an admin cannot change their own role
+    // (prevents accidentally locking yourself out of the admin panel)
+    app.patch("/api/users/:id/role", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { role, requesterId } = req.body;
+        const userObjectId = toObjectId(id);
+
+        if (!userObjectId) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid user id",
+          });
+        }
+
+        if (!["user", "admin"].includes(role)) {
+          return res.status(400).send({
+            success: false,
+            message: "Role must be either 'user' or 'admin'",
+          });
+        }
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can change user roles",
+          });
+        }
+
+        if (requesterId === id) {
+          return res.status(400).send({
+            success: false,
+            message: "You cannot change your own role",
+          });
+        }
+
+        const updatedUser = await usersCollection.findOneAndUpdate(
+          { _id: userObjectId },
+          { $set: { role, updatedAt: new Date() } },
+          { returnDocument: "after" }
+        );
+
+        if (!updatedUser) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.status(200).send({
+          success: true,
+          message: `User role updated to ${role}`,
+          data: updatedUser,
+        });
+      } catch (error) {
+        console.error("Update user role error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update user role",
+        });
+      }
+    });
+
+    // Delete a user account — admin only, and an admin cannot delete their own account
+    app.delete("/api/users/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { requesterId } = req.query;
+        const userObjectId = toObjectId(id);
+
+        if (!userObjectId) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid user id",
+          });
+        }
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can delete user accounts",
+          });
+        }
+
+        if (requesterId === id) {
+          return res.status(400).send({
+            success: false,
+            message: "You cannot delete your own account",
+          });
+        }
+
+        const result = await usersCollection.deleteOne({
+          _id: userObjectId,
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.status(200).send({
+          success: true,
+          message: "User account deleted successfully",
+        });
+      } catch (error) {
+        console.error("Delete user error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to delete user",
+        });
+      }
+    });
+
     // Profile stats — total lessons created, total favorites saved, and
     // all public lessons created by this user (newest first) for the profile grid
     app.get("/api/users/:id/profile-stats", async (req, res) => {
