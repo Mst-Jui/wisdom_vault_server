@@ -36,7 +36,7 @@ async function run() {
     await client.connect();
 
     const db = client.db("wisdom-vault");
-    const usersCollection = db.collection("users");
+    const usersCollection = db.collection("user");
     const lessonsCollection = db.collection("lessons");
     const favoritesCollection = db.collection("favorites");
     const commentsCollection = db.collection("comments");
@@ -692,6 +692,193 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to fetch user",
+        });
+      }
+    });
+
+    // Update own profile — only name and image (photo) can be changed here.
+    // Email, role, and isPremium are protected and can never be modified through this route.
+    app.patch("/api/users/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        // Accept either "image" or "photoURL" from the client, but always store as "image"
+        // to match the actual field name used in the user document.
+        const { name, image, photoURL } = req.body;
+        const incomingImage = image ?? photoURL;
+        const userObjectId = toObjectId(id);
+
+        if (!userObjectId) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid user id",
+          });
+        }
+
+        const updateData = {};
+        if (typeof name === "string" && name.trim()) {
+          updateData.name = name.trim();
+        }
+        if (typeof incomingImage === "string" && incomingImage.trim()) {
+          updateData.image = incomingImage.trim();
+        }
+
+        if (Object.keys(updateData).length === 0) {
+          return res.status(400).send({
+            success: false,
+            message: "Nothing to update",
+          });
+        }
+
+        const updatedUser = await usersCollection.findOneAndUpdate(
+          { _id: userObjectId },
+          { $set: { ...updateData, updatedAt: new Date() } },
+          { returnDocument: "after" }
+        );
+
+        if (!updatedUser) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.status(200).send({
+          success: true,
+          message: "Profile updated successfully",
+          data: updatedUser,
+        });
+      } catch (error) {
+        console.error("Update profile error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update profile",
+        });
+      }
+    });
+
+    // Profile stats — total lessons created, total favorites saved, and
+    // all public lessons created by this user (newest first) for the profile grid
+    app.get("/api/users/:id/profile-stats", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const lessonsCreatedCount = await lessonsCollection.countDocuments({
+          creatorId: id,
+        });
+
+        const favoritesSavedCount = await favoritesCollection.countDocuments(
+          { userId: id }
+        );
+
+        const publicLessons = await lessonsCollection
+          .find({ creatorId: id, visibility: "Public" })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send({
+          success: true,
+          data: {
+            lessonsCreatedCount,
+            favoritesSavedCount,
+            publicLessons,
+          },
+        });
+      } catch (error) {
+        console.error("Fetch profile stats error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch profile stats",
+        });
+      }
+    });
+
+    // Dashboard overview — counts, recently added lessons, and a 7-day
+    // activity chart dataset (lessons created per day) for the user dashboard home
+    app.get("/api/users/:id/dashboard-overview", async (req, res) => {
+      try {
+        // Make sure this endpoint is never cached by the browser/CDN —
+        // stale cached JSON is a common reason numbers look "stuck"
+        res.set("Cache-Control", "no-store, max-age=0");
+
+        const { id } = req.params;
+
+        const totalLessonsCreated = await lessonsCollection.countDocuments({
+          creatorId: id,
+        });
+
+        const totalFavoritesSaved = await favoritesCollection.countDocuments(
+          { userId: id }
+        );
+
+        // Sum of likesCount across all lessons this user created — "Community Reactions"
+        const userLessons = await lessonsCollection
+          .find({ creatorId: id })
+          .project({ likesCount: 1 })
+          .toArray();
+
+        const totalLikesReceived = userLessons.reduce(
+          (sum, lesson) => sum + (lesson.likesCount || 0),
+          0
+        );
+
+        const recentLessons = await lessonsCollection
+          .find({ creatorId: id })
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .toArray();
+
+        // Build a 7-day window (oldest to newest) and count lessons created per day
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); // includes today => 7 days total
+
+        const recentWindowLessons = await lessonsCollection
+          .find({
+            creatorId: id,
+            createdAt: { $gte: sevenDaysAgo },
+          })
+          .project({ createdAt: 1 })
+          .toArray();
+
+        const dayLabels = [];
+        const dayCounts = {};
+        for (let i = 0; i < 7; i++) {
+          const day = new Date(sevenDaysAgo);
+          day.setDate(day.getDate() + i);
+          const key = day.toISOString().slice(0, 10); // YYYY-MM-DD
+          dayLabels.push(key);
+          dayCounts[key] = 0;
+        }
+
+        recentWindowLessons.forEach((lesson) => {
+          const key = new Date(lesson.createdAt).toISOString().slice(0, 10);
+          if (dayCounts[key] !== undefined) {
+            dayCounts[key] += 1;
+          }
+        });
+
+        const weeklyActivity = dayLabels.map((date) => ({
+          date,
+          count: dayCounts[date],
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: {
+            totalLessonsCreated,
+            totalFavoritesSaved,
+            totalLikesReceived,
+            recentLessons,
+            weeklyActivity,
+          },
+        });
+      } catch (error) {
+        console.error("Fetch dashboard overview error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch dashboard overview",
         });
       }
     });
