@@ -1026,6 +1026,354 @@ async function run() {
       }
     });
 
+    // Ignore all reports on a lesson — clears reports, keeps the lesson live. Admin only.
+    app.patch("/api/admin/lessons/:id/ignore-reports", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { requesterId } = req.body;
+        const lessonObjectId = toObjectId(id);
+
+        if (!lessonObjectId) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid lesson id",
+          });
+        }
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can manage reported lessons",
+          });
+        }
+
+        const lesson = await lessonsCollection.findOne({
+          _id: lessonObjectId,
+        });
+
+        if (!lesson) {
+          return res.status(404).send({
+            success: false,
+            message: "Lesson not found",
+          });
+        }
+
+        await reportsCollection.deleteMany({ lessonId: id });
+
+        res.status(200).send({
+          success: true,
+          message: "Reports cleared. The lesson remains live.",
+        });
+      } catch (error) {
+        console.error("Ignore reports error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to clear reports",
+        });
+      }
+    });
+
+    // List only lessons that have at least one report, with title + report count
+    // — for the admin Reported / Flagged Lessons page
+    app.get("/api/admin/reported-lessons", async (req, res) => {
+      try {
+        const { requesterId } = req.query;
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can view reported lessons",
+          });
+        }
+
+        const reportCounts = await reportsCollection
+          .aggregate([{ $group: { _id: "$lessonId", count: { $sum: 1 } } }])
+          .toArray();
+
+        if (reportCounts.length === 0) {
+          return res.status(200).send({ success: true, data: [] });
+        }
+
+        const reportedLessonIds = reportCounts
+          .map((r) => toObjectId(r._id))
+          .filter(Boolean);
+
+        const lessons = await lessonsCollection
+          .find({ _id: { $in: reportedLessonIds } })
+          .toArray();
+
+        const countMap = reportCounts.reduce((map, item) => {
+          map[item._id] = item.count;
+          return map;
+        }, {});
+
+        const lessonsWithReportCount = lessons
+          .map((lesson) => ({
+            ...lesson,
+            reportCount: countMap[lesson._id.toString()] || 0,
+          }))
+          .sort((a, b) => b.reportCount - a.reportCount);
+
+        res.status(200).send({
+          success: true,
+          data: lessonsWithReportCount,
+        });
+      } catch (error) {
+        console.error("Fetch reported lessons error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch reported lessons",
+        });
+      }
+    });
+
+    // Get all report entries for a single lesson, including reporter name/email
+    // — used to populate the "view reasons" modal
+    app.get("/api/admin/lessons/:id/reports", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { requesterId } = req.query;
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can view report details",
+          });
+        }
+
+        const reports = await reportsCollection
+          .find({ lessonId: id })
+          .sort({ timestamp: -1 })
+          .toArray();
+
+        // Attach reporter name where we can resolve it from reporterUserId
+        const reporterIds = [
+          ...new Set(reports.map((r) => r.reporterUserId).filter(Boolean)),
+        ];
+        const reporterObjectIds = reporterIds
+          .map((rid) => toObjectId(rid))
+          .filter(Boolean);
+
+        const reporters = reporterObjectIds.length
+          ? await usersCollection
+              .find(
+                { _id: { $in: reporterObjectIds } },
+                { projection: { name: 1, email: 1 } }
+              )
+              .toArray()
+          : [];
+
+        const reporterMap = reporters.reduce((map, r) => {
+          map[r._id.toString()] = r;
+          return map;
+        }, {});
+
+        const reportsWithReporter = reports.map((report) => ({
+          ...report,
+          reporterName:
+            reporterMap[report.reporterUserId]?.name || "Unknown user",
+          reporterEmail:
+            reporterMap[report.reporterUserId]?.email ||
+            report.reportedUserEmail ||
+            "",
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: reportsWithReporter,
+        });
+      } catch (error) {
+        console.error("Fetch lesson reports error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch report details",
+        });
+      }
+    });
+
+    // Admin activity summary — platform-wide moderation totals for the admin profile page.
+    // The schema doesn't track which specific admin performed each moderation action,
+    // so this reflects overall platform moderation activity rather than a per-admin tally.
+    app.get("/api/users/:id/admin-activity", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const isAdmin = await requireAdmin(id);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can view this activity summary",
+          });
+        }
+
+        const lessonsReviewedCount = await lessonsCollection.countDocuments({
+          isReviewed: true,
+        });
+
+        const lessonsFeaturedCount = await lessonsCollection.countDocuments({
+          isFeatured: true,
+        });
+
+        const totalUsers = await usersCollection.countDocuments({});
+        const totalLessons = await lessonsCollection.countDocuments({});
+        const openReportsCount = (
+          await reportsCollection
+            .aggregate([{ $group: { _id: "$lessonId" } }])
+            .toArray()
+        ).length;
+
+        res.status(200).send({
+          success: true,
+          data: {
+            lessonsReviewedCount,
+            lessonsFeaturedCount,
+            totalUsers,
+            totalLessons,
+            openReportsCount,
+          },
+        });
+      } catch (error) {
+        console.error("Fetch admin activity error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch admin activity",
+        });
+      }
+    });
+
+    // Admin dashboard overview — platform-wide stats, top contributors,
+    // today's new lessons, and 30-day lesson/user growth chart data
+    app.get("/api/admin/dashboard-overview", async (req, res) => {
+      try {
+        const { requesterId } = req.query;
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can view this dashboard",
+          });
+        }
+
+        const totalUsers = await usersCollection.countDocuments({});
+        const totalPublicLessons = await lessonsCollection.countDocuments({
+          visibility: "Public",
+        });
+
+        const reportedLessonIds = (
+          await reportsCollection
+            .aggregate([{ $group: { _id: "$lessonId" } }])
+            .toArray()
+        ).length;
+
+        // "Today" in UTC, from midnight onward
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+
+        const todaysNewLessons = await lessonsCollection.countDocuments({
+          createdAt: { $gte: startOfToday },
+        });
+
+        // Most active contributors — top 5 users by lesson count
+        const contributorAgg = await lessonsCollection
+          .aggregate([
+            { $group: { _id: "$creatorId", lessonCount: { $sum: 1 } } },
+            { $sort: { lessonCount: -1 } },
+            { $limit: 5 },
+          ])
+          .toArray();
+
+        const contributorIds = contributorAgg
+          .map((c) => toObjectId(c._id))
+          .filter(Boolean);
+
+        const contributorUsers = contributorIds.length
+          ? await usersCollection
+              .find(
+                { _id: { $in: contributorIds } },
+                { projection: { name: 1, image: 1 } }
+              )
+              .toArray()
+          : [];
+
+        const contributorMap = contributorUsers.reduce((map, u) => {
+          map[u._id.toString()] = u;
+          return map;
+        }, {});
+
+        const topContributors = contributorAgg.map((c) => ({
+          userId: c._id,
+          name: contributorMap[c._id]?.name || "Unknown",
+          image: contributorMap[c._id]?.image || "",
+          lessonCount: c.lessonCount,
+        }));
+
+        // 30-day growth data — lessons created per day and users joined per day
+        const thirtyDaysAgo = new Date(startOfToday);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29); // includes today => 30 days total
+
+        const recentLessons = await lessonsCollection
+          .find({ createdAt: { $gte: thirtyDaysAgo } })
+          .project({ createdAt: 1 })
+          .toArray();
+
+        const recentUsers = await usersCollection
+          .find({ createdAt: { $gte: thirtyDaysAgo } })
+          .project({ createdAt: 1 })
+          .toArray();
+
+        const dayLabels = [];
+        const lessonGrowth = {};
+        const userGrowth = {};
+        for (let i = 0; i < 30; i++) {
+          const day = new Date(thirtyDaysAgo);
+          day.setDate(day.getDate() + i);
+          const key = day.toISOString().slice(0, 10);
+          dayLabels.push(key);
+          lessonGrowth[key] = 0;
+          userGrowth[key] = 0;
+        }
+
+        recentLessons.forEach((lesson) => {
+          const key = new Date(lesson.createdAt).toISOString().slice(0, 10);
+          if (lessonGrowth[key] !== undefined) lessonGrowth[key] += 1;
+        });
+
+        recentUsers.forEach((user) => {
+          if (!user.createdAt) return;
+          const key = new Date(user.createdAt).toISOString().slice(0, 10);
+          if (userGrowth[key] !== undefined) userGrowth[key] += 1;
+        });
+
+        const growthData = dayLabels.map((date) => ({
+          date,
+          lessons: lessonGrowth[date],
+          users: userGrowth[date],
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: {
+            totalUsers,
+            totalPublicLessons,
+            reportedLessonIds,
+            todaysNewLessons,
+            topContributors,
+            growthData,
+          },
+        });
+      } catch (error) {
+        console.error("Fetch admin dashboard overview error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch dashboard overview",
+        });
+      }
+    });
+
     // Profile stats — total lessons created, total favorites saved, and
     // all public lessons created by this user (newest first) for the profile grid
     app.get("/api/users/:id/profile-stats", async (req, res) => {
@@ -1039,6 +1387,7 @@ async function run() {
         const favoritesSavedCount = await favoritesCollection.countDocuments(
           { userId: id }
         );
+
 
         const publicLessons = await lessonsCollection
           .find({ creatorId: id, visibility: "Public" })
