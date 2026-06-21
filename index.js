@@ -934,6 +934,98 @@ async function run() {
       }
     });
 
+    // ---------------- ADMIN: MANAGE LESSONS ----------------
+
+    // List all lessons (any visibility, any creator) with creator name, report
+    // count, and overall stats — for the admin Manage Lessons page
+    app.get("/api/admin/lessons", async (req, res) => {
+      try {
+        const { requesterId } = req.query;
+
+        const isAdmin = await requireAdmin(requesterId);
+        if (!isAdmin) {
+          return res.status(403).send({
+            success: false,
+            message: "Only admins can manage lessons",
+          });
+        }
+
+        const lessons = await lessonsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        // Attach creator name to each lesson
+        const creatorIds = [
+          ...new Set(lessons.map((l) => l.creatorId).filter(Boolean)),
+        ];
+        const creatorObjectIds = creatorIds
+          .map((cid) => toObjectId(cid))
+          .filter(Boolean);
+
+        const creators = creatorObjectIds.length
+          ? await usersCollection
+              .find(
+                { _id: { $in: creatorObjectIds } },
+                { projection: { name: 1, email: 1 } }
+              )
+              .toArray()
+          : [];
+
+        const creatorMap = creators.reduce((map, c) => {
+          map[c._id.toString()] = c;
+          return map;
+        }, {});
+
+        // Attach report count per lesson
+        const reportCounts = await reportsCollection
+          .aggregate([{ $group: { _id: "$lessonId", count: { $sum: 1 } } }])
+          .toArray();
+
+        const reportMap = reportCounts.reduce((map, item) => {
+          map[item._id] = item.count;
+          return map;
+        }, {});
+
+        const lessonsWithExtras = lessons.map((lesson) => ({
+          ...lesson,
+          creatorName: creatorMap[lesson.creatorId]?.name || "Unknown",
+          creatorEmail: creatorMap[lesson.creatorId]?.email || "",
+          reportCount: reportMap[lesson._id.toString()] || 0,
+        }));
+
+        // Overall stats for the page header
+        const publicCount = lessons.filter(
+          (l) => l.visibility === "Public"
+        ).length;
+        const privateCount = lessons.filter(
+          (l) => l.visibility === "Private"
+        ).length;
+        const flaggedCount = lessons.filter(
+          (l) => (reportMap[l._id.toString()] || 0) > 0
+        ).length;
+
+        res.status(200).send({
+          success: true,
+          data: {
+            lessons: lessonsWithExtras,
+            stats: {
+              total: lessons.length,
+              publicCount,
+              privateCount,
+              flaggedCount,
+            },
+          },
+        });
+      } catch (error) {
+        console.error("Fetch admin lessons error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch lessons",
+        });
+      }
+    });
+
     // Profile stats — total lessons created, total favorites saved, and
     // all public lessons created by this user (newest first) for the profile grid
     app.get("/api/users/:id/profile-stats", async (req, res) => {
