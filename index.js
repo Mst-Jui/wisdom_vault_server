@@ -41,6 +41,191 @@ async function run() {
     const favoritesCollection = db.collection("favorites");
     const commentsCollection = db.collection("comments");
     const reportsCollection = db.collection("lessonsReports");
+    const subscriptionsCollection = db.collection("subscriptions");
+
+    // app.put()
+
+
+    app.post("/subscription", async (req, res) => {
+      const { sessionId, userId, priceId } = req.body;
+
+      const isExist = await subscriptionsCollection.findOne({ sessionId });
+
+      if (isExist) {
+        return res.json({ msg: "Already exist!" });
+      }
+
+      await subscriptionsCollection.insertOne({
+        sessionId,
+        userId,
+        priceId,
+      });
+
+      // update user role
+      await usersCollection.updateOne(
+        { _id: new ObjectId(userId) },
+        { $set: { isPremium: true } }
+      );
+
+      res.json({ msg: "Payment successfull!" });
+    });
+
+    // PUT route to update user plan
+    // app.put('/api/me/update-plan/:userId', async (req, res) => {
+    //   try {
+    //     const { userId } = req.params;
+    //     const userObjectId = toObjectId(userId);
+
+    //     if (!userObjectId) {
+    //       return res.status(400).send({
+    //         success: false,
+    //         message: "Invalid user id",
+    //       });
+    //     }
+
+
+    //     const updatedUser = await usersCollection.findOneAndUpdate(
+    //       { _id: userObjectId },
+    //       { $set: { isPremium: true } },
+    //       { returnDocument: "after" }
+    //     );
+
+    //     if (!updatedUser) {
+    //       return res.status(404).send({
+    //         success: false,
+    //         message: "User not found",
+    //       });
+    //     }
+
+    //     res.status(200).send({
+    //       success: true,
+    //       message: "Plan updated successfully",
+    //       data: updatedUser,
+    //     });
+    //   } catch (error) {
+    //     console.error("Update plan error:", error);
+    //     res.status(500).send({
+    //       success: false,
+    //       message: "Internal server error",
+    //     });
+    //   }
+    // });
+
+
+    app.get("/api/lessons/most-saved", async (req, res) => {
+      try {
+        const { limit } = req.query;
+        const pageSize = Math.max(parseInt(limit) || 6, 1);
+
+        const lessons = await lessonsCollection
+          .find({ visibility: "Public", favoritesCount: { $gt: 0 } })
+          .sort({ favoritesCount: -1 })
+          .limit(pageSize)
+          .toArray();
+
+        // Attach creator name
+        const creatorIds = [
+          ...new Set(lessons.map((l) => l.creatorId).filter(Boolean)),
+        ];
+        const creatorObjectIds = creatorIds
+          .map((cid) => toObjectId(cid))
+          .filter(Boolean);
+
+        const creators = creatorObjectIds.length
+          ? await usersCollection
+            .find(
+              { _id: { $in: creatorObjectIds } },
+              { projection: { name: 1, image: 1 } }
+            )
+            .toArray()
+          : [];
+
+        const creatorMap = creators.reduce((map, c) => {
+          map[c._id.toString()] = c;
+          return map;
+        }, {});
+
+        const lessonsWithCreator = lessons.map((lesson) => ({
+          ...lesson,
+          creatorName: creatorMap[lesson.creatorId]?.name || "Unknown",
+          creatorImage: creatorMap[lesson.creatorId]?.image || "",
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: lessonsWithCreator,
+        });
+      } catch (error) {
+        console.error("Fetch most saved lessons error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch most saved lessons",
+        });
+      }
+    });
+
+
+
+
+    app.get("/api/top-contributors", async (req, res) => {
+      try {
+        const { limit } = req.query;
+        const pageSize = Math.max(parseInt(limit) || 6, 1);
+
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+        const contributorAgg = await lessonsCollection
+          .aggregate([
+            {
+              $match: {
+                visibility: "Public",
+                createdAt: { $gte: sevenDaysAgo },
+              },
+            },
+            { $group: { _id: "$creatorId", lessonCount: { $sum: 1 } } },
+            { $sort: { lessonCount: -1 } },
+            { $limit: pageSize },
+          ])
+          .toArray();
+
+        const contributorIds = contributorAgg
+          .map((c) => toObjectId(c._id))
+          .filter(Boolean);
+
+        const contributors = contributorIds.length
+          ? await usersCollection
+            .find(
+              { _id: { $in: contributorIds } },
+              { projection: { name: 1, image: 1 } }
+            )
+            .toArray()
+          : [];
+
+        const contributorMap = contributors.reduce((map, u) => {
+          map[u._id.toString()] = u;
+          return map;
+        }, {});
+
+        const result = contributorAgg.map((c) => ({
+          userId: c._id,
+          name: contributorMap[c._id]?.name || "Unknown",
+          image: contributorMap[c._id]?.image || "",
+          lessonCount: c.lessonCount,
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: result,
+        });
+      } catch (error) {
+        console.error("Fetch top contributors error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch top contributors",
+        });
+      }
+    });
 
     // =========================================================
     // LESSONS
@@ -126,6 +311,60 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to fetch lessons",
+        });
+      }
+    });
+
+    // Get featured public lessons (admin-curated) — for the home page Featured section
+    // IMPORTANT: must be declared BEFORE "/api/lessons/:id" to avoid route collision
+    app.get("/api/lessons/featured", async (req, res) => {
+      try {
+        const { limit } = req.query;
+        const pageSize = Math.max(parseInt(limit) || 6, 1);
+
+        const lessons = await lessonsCollection
+          .find({ isFeatured: true, visibility: "Public" })
+          .sort({ createdAt: -1 })
+          .limit(pageSize)
+          .toArray();
+
+        // Attach creator name for the card display
+        const creatorIds = [
+          ...new Set(lessons.map((l) => l.creatorId).filter(Boolean)),
+        ];
+        const creatorObjectIds = creatorIds
+          .map((cid) => toObjectId(cid))
+          .filter(Boolean);
+
+        const creators = creatorObjectIds.length
+          ? await usersCollection
+            .find(
+              { _id: { $in: creatorObjectIds } },
+              { projection: { name: 1, image: 1 } }
+            )
+            .toArray()
+          : [];
+
+        const creatorMap = creators.reduce((map, c) => {
+          map[c._id.toString()] = c;
+          return map;
+        }, {});
+
+        const lessonsWithCreator = lessons.map((lesson) => ({
+          ...lesson,
+          creatorName: creatorMap[lesson.creatorId]?.name || "Unknown",
+          creatorImage: creatorMap[lesson.creatorId]?.image || "",
+        }));
+
+        res.status(200).send({
+          success: true,
+          data: lessonsWithCreator,
+        });
+      } catch (error) {
+        console.error("Fetch featured lessons error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch featured lessons",
         });
       }
     });
@@ -537,8 +776,8 @@ async function run() {
 
         const lessons = lessonIds.length
           ? await lessonsCollection
-              .find({ _id: { $in: lessonIds } })
-              .toArray()
+            .find({ _id: { $in: lessonIds } })
+            .toArray()
           : [];
 
         // Attach creator name to each lesson for display in the table
@@ -551,11 +790,11 @@ async function run() {
 
         const creators = creatorObjectIds.length
           ? await usersCollection
-              .find(
-                { _id: { $in: creatorObjectIds } },
-                { projection: { name: 1 } }
-              )
-              .toArray()
+            .find(
+              { _id: { $in: creatorObjectIds } },
+              { projection: { name: 1 } }
+            )
+            .toArray()
           : [];
 
         const creatorMap = creators.reduce((map, c) => {
@@ -817,6 +1056,13 @@ async function run() {
       }
     });
 
+
+
+
+    // get one user 
+
+
+
     // Promote/demote a user's role — admin only, and an admin cannot change their own role
     // (prevents accidentally locking yourself out of the admin panel)
     app.patch("/api/users/:id/role", async (req, res) => {
@@ -965,11 +1211,11 @@ async function run() {
 
         const creators = creatorObjectIds.length
           ? await usersCollection
-              .find(
-                { _id: { $in: creatorObjectIds } },
-                { projection: { name: 1, email: 1 } }
-              )
-              .toArray()
+            .find(
+              { _id: { $in: creatorObjectIds } },
+              { projection: { name: 1, email: 1 } }
+            )
+            .toArray()
           : [];
 
         const creatorMap = creators.reduce((map, c) => {
@@ -1159,11 +1405,11 @@ async function run() {
 
         const reporters = reporterObjectIds.length
           ? await usersCollection
-              .find(
-                { _id: { $in: reporterObjectIds } },
-                { projection: { name: 1, email: 1 } }
-              )
-              .toArray()
+            .find(
+              { _id: { $in: reporterObjectIds } },
+              { projection: { name: 1, email: 1 } }
+            )
+            .toArray()
           : [];
 
         const reporterMap = reporters.reduce((map, r) => {
@@ -1292,11 +1538,11 @@ async function run() {
 
         const contributorUsers = contributorIds.length
           ? await usersCollection
-              .find(
-                { _id: { $in: contributorIds } },
-                { projection: { name: 1, image: 1 } }
-              )
-              .toArray()
+            .find(
+              { _id: { $in: contributorIds } },
+              { projection: { name: 1, image: 1 } }
+            )
+            .toArray()
           : [];
 
         const contributorMap = contributorUsers.reduce((map, u) => {
