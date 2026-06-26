@@ -446,7 +446,7 @@ async function run() {
 
     // Get all lessons created by a specific user (for My Lessons dashboard page)
     // IMPORTANT: must be declared BEFORE "/api/lessons/:id" to avoid route collision
-    app.get("/api/lessons/user/:creatorId", async (req, res) => {
+    app.get("/api/lessons/user/:creatorId",verifyToken , async (req, res) => {
       try {
         const { creatorId } = req.params;
 
@@ -470,7 +470,7 @@ async function run() {
     });
 
     // Get single lesson details — creator info, comments, similar lessons
-    app.get("/api/lessons/:id", async (req, res) => {
+    app.get("/api/lessons/:id",verifyToken ,async (req, res) => {
       try {
         const { id } = req.params;
         const lessonObjectId = toObjectId(id);
