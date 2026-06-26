@@ -52,35 +52,7 @@ async function run() {
     const reportsCollection = db.collection("lessonsReports");
     const subscriptionsCollection = db.collection("subscriptions");
 
-    //    const verifyToken = async (req, res, next) => {
-    //   const authHeader = req?.headers.authorization
-    //   console.log(authHeader);
-
-    //   if (!authHeader || !authHeader.startsWith("Bearer")) {
-    //     return res.status(401).json({
-    //       message: "Unauthorized"
-    //     })
-    //   }
-    //   const token = authHeader.split(" ")[1]
-    //   if (!token) {
-    //     return res.status(401).json({
-    //       message: "Unauthorized"
-    //     })
-    //   }
-    //   try {
-    //     const { payload } = await jwtVerify(token, JWKS)
-    //     req.user = payload
-    //     console.log("payload", payload);
-
-    //     next()
-    //   }
-    //   catch (error) {
-    //     console.error("JWT Verify Error:", error);
-    //     return res.status(403).json({
-    //       message: "Forbidden"
-    //     })
-    //   }
-    // }
+   
 
 
     const sessionCollection = db.collection('session');
@@ -121,7 +93,7 @@ async function run() {
     }
 
 
-    app.post("/subscription", async (req, res) => {
+    app.post("/subscription", verifyToken, async (req, res) => {
       const { sessionId, userId, priceId } = req.body;
 
       const isExist = await subscriptionsCollection.findOne({ sessionId });
@@ -146,46 +118,7 @@ async function run() {
     });
 
     // PUT route to update user plan
-    // app.put('/api/me/update-plan/:userId', async (req, res) => {
-    //   try {
-    //     const { userId } = req.params;
-    //     const userObjectId = toObjectId(userId);
-
-    //     if (!userObjectId) {
-    //       return res.status(400).send({
-    //         success: false,
-    //         message: "Invalid user id",
-    //       });
-    //     }
-
-
-    //     const updatedUser = await usersCollection.findOneAndUpdate(
-    //       { _id: userObjectId },
-    //       { $set: { isPremium: true } },
-    //       { returnDocument: "after" }
-    //     );
-
-    //     if (!updatedUser) {
-    //       return res.status(404).send({
-    //         success: false,
-    //         message: "User not found",
-    //       });
-    //     }
-
-    //     res.status(200).send({
-    //       success: true,
-    //       message: "Plan updated successfully",
-    //       data: updatedUser,
-    //     });
-    //   } catch (error) {
-    //     console.error("Update plan error:", error);
-    //     res.status(500).send({
-    //       success: false,
-    //       message: "Internal server error",
-    //     });
-    //   }
-    // });
-
+   
 
     app.get("/api/lessons/most-saved", async (req, res) => {
       try {
@@ -302,7 +235,7 @@ async function run() {
       }
     });
 
-    // =========================================================
+    
     // LESSONS
     // =========================================================
 
@@ -446,7 +379,7 @@ async function run() {
 
     // Get all lessons created by a specific user (for My Lessons dashboard page)
     // IMPORTANT: must be declared BEFORE "/api/lessons/:id" to avoid route collision
-    app.get("/api/lessons/user/:creatorId",verifyToken , async (req, res) => {
+    app.get("/api/lessons/user/:creatorId", verifyToken, async (req, res) => {
       try {
         const { creatorId } = req.params;
 
@@ -470,7 +403,7 @@ async function run() {
     });
 
     // Get single lesson details — creator info, comments, similar lessons
-    app.get("/api/lessons/:id",verifyToken ,async (req, res) => {
+    app.get("/api/lessons/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const lessonObjectId = toObjectId(id);
@@ -836,7 +769,7 @@ async function run() {
     });
 
     // Get all favorites of a logged-in user (for My Favorites dashboard page)
-    app.get("/api/favorites/:userId", async (req, res) => {
+    app.get("/api/favorites/:userId", verifyToken, async (req, res) => {
       try {
         const { userId } = req.params;
 
@@ -906,7 +839,7 @@ async function run() {
 
     // =========================================================
     // COMMENTS
-    // =========================================================
+    
 
     app.post("/api/comments", async (req, res) => {
       try {
