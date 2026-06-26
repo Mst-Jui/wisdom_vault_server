@@ -5,6 +5,8 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
+
 
 dotenv.config();
 
@@ -31,6 +33,13 @@ const client = new MongoClient(uri, {
 // Helper: safely build an ObjectId, returns null if invalid
 const toObjectId = (id) => (ObjectId.isValid(id) ? new ObjectId(id) : null);
 
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
+)
+
+
+
 async function run() {
   try {
     await client.connect();
@@ -43,7 +52,73 @@ async function run() {
     const reportsCollection = db.collection("lessonsReports");
     const subscriptionsCollection = db.collection("subscriptions");
 
-    // app.put()
+    //    const verifyToken = async (req, res, next) => {
+    //   const authHeader = req?.headers.authorization
+    //   console.log(authHeader);
+
+    //   if (!authHeader || !authHeader.startsWith("Bearer")) {
+    //     return res.status(401).json({
+    //       message: "Unauthorized"
+    //     })
+    //   }
+    //   const token = authHeader.split(" ")[1]
+    //   if (!token) {
+    //     return res.status(401).json({
+    //       message: "Unauthorized"
+    //     })
+    //   }
+    //   try {
+    //     const { payload } = await jwtVerify(token, JWKS)
+    //     req.user = payload
+    //     console.log("payload", payload);
+
+    //     next()
+    //   }
+    //   catch (error) {
+    //     console.error("JWT Verify Error:", error);
+    //     return res.status(403).json({
+    //       message: "Forbidden"
+    //     })
+    //   }
+    // }
+
+
+    const sessionCollection = db.collection('session');
+    const verifyToken = async (req, res, next) => {
+
+      const authHeader = req.headers?.authorization;
+      if (!authHeader) {
+        return res.status(401).send({ message: 'unauthorized access' })
+      }
+
+      const token = authHeader.split(' ')[1]
+
+      if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' })
+      }
+
+      const query = { token: token }
+      const session = await sessionCollection.findOne(query);
+
+      if (!session) {
+        return res.status(401).send({ message: 'unauthorized access' })
+      }
+
+      const userId = session.userId;
+
+
+      const userQuery = {
+        _id: userId
+      }
+
+      const user = await usersCollection.findOne(userQuery);
+      if (!user) {
+        return res.status(401).send({ message: 'unauthorized access' })
+      }
+      // set data in the req object
+      req.user = user;
+      next();
+    }
 
 
     app.post("/subscription", async (req, res) => {
@@ -232,7 +307,7 @@ async function run() {
     // =========================================================
 
     // Create lesson
-    app.post("/api/lessons", async (req, res) => {
+    app.post("/api/lessons", verifyToken, async (req, res) => {
       try {
         const lessonData = req.body;
 
