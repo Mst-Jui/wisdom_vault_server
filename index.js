@@ -1697,18 +1697,63 @@ async function run() {
 
     // Profile stats — total lessons created, total favorites saved, and
     // all public lessons created by this user (newest first) for the profile grid
+    // app.get("/api/users/:id/profile-stats", async (req, res) => {
+    //   try {
+    //     const { id } = req.params;
+
+    //     const lessonsCreatedCount = await lessonsCollection.countDocuments({
+    //       creatorId: id,
+    //     });
+
+    //     const favoritesSavedCount = await favoritesCollection.countDocuments(
+    //       { userId: id }
+    //     );
+
+
+    //     const publicLessons = await lessonsCollection
+    //       .find({ creatorId: id, visibility: "Public" })
+    //       .sort({ createdAt: -1 })
+    //       .toArray();
+
+    //     res.status(200).send({
+    //       success: true,
+    //       data: {
+    //         lessonsCreatedCount,
+    //         favoritesSavedCount,
+    //         publicLessons,
+    //       },
+    //     });
+    //   } catch (error) {
+    //     console.error("Fetch profile stats error:", error);
+    //     res.status(500).send({
+    //       success: false,
+    //       message: "Failed to fetch profile stats",
+    //     });
+    //   }
+    // });
+
+
     app.get("/api/users/:id/profile-stats", async (req, res) => {
       try {
         const { id } = req.params;
+
+        // user info fetch (ObjectId দিয়ে)
+        const userObjectId = toObjectId(id);
+        let userInfo = null;
+        if (userObjectId) {
+          userInfo = await usersCollection.findOne(
+            { _id: userObjectId },
+            { projection: { name: 1, image: 1, isPremium: 1, role: 1 } }
+          );
+        }
 
         const lessonsCreatedCount = await lessonsCollection.countDocuments({
           creatorId: id,
         });
 
-        const favoritesSavedCount = await favoritesCollection.countDocuments(
-          { userId: id }
-        );
-
+        const favoritesSavedCount = await favoritesCollection.countDocuments({
+          userId: id,
+        });
 
         const publicLessons = await lessonsCollection
           .find({ creatorId: id, visibility: "Public" })
@@ -1718,6 +1763,7 @@ async function run() {
         res.status(200).send({
           success: true,
           data: {
+            userInfo,
             lessonsCreatedCount,
             favoritesSavedCount,
             publicLessons,
