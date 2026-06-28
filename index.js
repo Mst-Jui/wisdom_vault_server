@@ -52,7 +52,7 @@ async function run() {
     const reportsCollection = db.collection("lessonsReports");
     const subscriptionsCollection = db.collection("subscriptions");
 
-   
+
 
 
     const sessionCollection = db.collection('session');
@@ -118,7 +118,7 @@ async function run() {
     });
 
     // PUT route to update user plan
-   
+
 
     app.get("/api/lessons/most-saved", async (req, res) => {
       try {
@@ -235,7 +235,7 @@ async function run() {
       }
     });
 
-    
+
     // LESSONS
     // =========================================================
 
@@ -541,7 +541,7 @@ async function run() {
     });
 
     // Update lesson — owner only (full edit form, or quick toggle of visibility/accessLevel)
-    app.patch("/api/lessons/:id", async (req, res) => {
+    app.patch("/api/lessons/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { userId, ...updateData } = req.body;
@@ -608,7 +608,7 @@ async function run() {
     });
 
     // Delete lesson — owner or admin only
-    app.delete("/api/lessons/:id", async (req, res) => {
+    app.delete("/api/lessons/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { userId } = req.query;
@@ -839,7 +839,7 @@ async function run() {
 
     // =========================================================
     // COMMENTS
-    
+
 
     app.post("/api/comments", async (req, res) => {
       try {
@@ -918,7 +918,7 @@ async function run() {
     // USERS
     // =========================================================
 
-    app.get("/api/users/:email", async (req, res) => {
+    app.get("/api/users/:email", verifyToken,async (req, res) => {
       try {
         const email = req.params.email;
         const user = await usersCollection.findOne({ email });
@@ -945,7 +945,7 @@ async function run() {
 
     // Update own profile — only name and image (photo) can be changed here.
     // Email, role, and isPremium are protected and can never be modified through this route.
-    app.patch("/api/users/:id", async (req, res) => {
+    app.patch("/api/users/:id",verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         // Accept either "image" or "photoURL" from the client, but always store as "image"
