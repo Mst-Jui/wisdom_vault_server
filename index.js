@@ -280,10 +280,10 @@ async function run() {
     });
 
     // Get all public lessons — search + filter + sort + pagination
+    
     app.get("/api/lessons", async (req, res) => {
       try {
-        const { category, emotionalTone, search, sort, page, limit } =
-          req.query;
+        const { category, emotionalTone, search, sort, page, limit } = req.query;
 
         const query = { visibility: "Public" };
         if (category) query.category = category;
@@ -294,7 +294,7 @@ async function run() {
         const pageSize = Math.max(parseInt(limit) || 9, 1);
         const skip = (pageNumber - 1) * pageSize;
 
-        let sortQuery = { createdAt: -1 }; // default newest
+        let sortQuery = { createdAt: -1 };
         if (sort === "oldest") sortQuery = { createdAt: 1 };
         else if (sort === "mostSaved") sortQuery = { favoritesCount: -1 };
 
@@ -306,10 +306,31 @@ async function run() {
           .limit(pageSize)
           .toArray();
 
+        // Creator info attach
+        const creatorIds = [...new Set(lessons.map((l) => l.creatorId).filter(Boolean))];
+        const creatorObjectIds = creatorIds.map((cid) => toObjectId(cid)).filter(Boolean);
+
+        const creators = creatorObjectIds.length
+          ? await usersCollection
+            .find({ _id: { $in: creatorObjectIds } }, { projection: { name: 1, image: 1 } })
+            .toArray()
+          : [];
+
+        const creatorMap = creators.reduce((map, c) => {
+          map[c._id.toString()] = c;
+          return map;
+        }, {});
+
+        const lessonsWithCreator = lessons.map((lesson) => ({
+          ...lesson,
+          creatorName: creatorMap[lesson.creatorId]?.name || "Unknown",
+          creatorImage: creatorMap[lesson.creatorId]?.image || "",
+        }));
+
         res.status(200).send({
           success: true,
           message: "Lessons fetched successfully",
-          data: lessons,
+          data: lessonsWithCreator,
           totalCount,
           page: pageNumber,
           totalPages: Math.ceil(totalCount / pageSize) || 1,
@@ -670,7 +691,7 @@ async function run() {
     // =========================================================
 
     // Toggle favorite (save / unsave) — keeps lessons.favoritesCount in sync
-    app.post("/api/favorites/toggle", verifyToken, async (req, res) => {
+    app.post("/api/favorites/toggle",  async (req, res) => {
       try {
         const { lessonId, userId } = req.body;
         const lessonObjectId = toObjectId(lessonId);
@@ -739,7 +760,7 @@ async function run() {
     });
 
     // Check if a lesson is favorited by a user
-    app.get("/api/favorites/check", async (req, res) => {
+    app.get("/api/favorites/check",verifyToken,  async (req, res) => {
       try {
         const { lessonId, userId } = req.query;
 
@@ -841,7 +862,7 @@ async function run() {
     // COMMENTS
 
 
-    app.post("/api/comments", verifyToken, async (req, res) => {
+    app.post("/api/comments", async (req, res) => {
       try {
         const { lessonId, userId, userName, userPhoto, text } = req.body;
 
@@ -881,7 +902,7 @@ async function run() {
     // REPORTS
     // =========================================================
 
-    app.post("/api/lessons/:id/report", verifyToken, async (req, res) => {
+    app.post("/api/lessons/:id/report", async (req, res) => {
       try {
         const { id } = req.params;
         const { reporterUserId, reportedUserEmail, reason } = req.body;
@@ -1069,7 +1090,7 @@ async function run() {
 
     // Promote/demote a user's role — admin only, and an admin cannot change their own role
     // (prevents accidentally locking yourself out of the admin panel)
-    app.patch("/api/users/:id/role",verifyToken, async (req, res) => {
+    app.patch("/api/users/:id/role", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { role, requesterId } = req.body;
@@ -1132,7 +1153,7 @@ async function run() {
     });
 
     // Delete a user account — admin only, and an admin cannot delete their own account
-    app.delete("/api/users/:id",verifyToken, async (req, res) => {
+    app.delete("/api/users/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { requesterId } = req.query;
@@ -1277,7 +1298,7 @@ async function run() {
     });
 
     // Ignore all reports on a lesson — clears reports, keeps the lesson live. Admin only.
-    app.patch("/api/admin/lessons/:id/ignore-reports",verifyToken, async (req, res) => {
+    app.patch("/api/admin/lessons/:id/ignore-reports", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { requesterId } = req.body;
@@ -1381,7 +1402,7 @@ async function run() {
 
     // Get all report entries for a single lesson, including reporter name/email
     // — used to populate the "view reasons" modal
-    app.get("/api/admin/lessons/:id/reports",verifyToken, async (req, res) => {
+    app.get("/api/admin/lessons/:id/reports", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { requesterId } = req.query;
@@ -1447,7 +1468,7 @@ async function run() {
     // Admin activity summary — platform-wide moderation totals for the admin profile page.
     // The schema doesn't track which specific admin performed each moderation action,
     // so this reflects overall platform moderation activity rather than a per-admin tally.
-    app.get("/api/users/:id/admin-activity",verifyToken, async (req, res) => {
+    app.get("/api/users/:id/admin-activity", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
 
