@@ -670,7 +670,7 @@ async function run() {
     // =========================================================
 
     // Toggle favorite (save / unsave) — keeps lessons.favoritesCount in sync
-    app.post("/api/favorites/toggle", async (req, res) => {
+    app.post("/api/favorites/toggle", verifyToken, async (req, res) => {
       try {
         const { lessonId, userId } = req.body;
         const lessonObjectId = toObjectId(lessonId);
@@ -841,7 +841,7 @@ async function run() {
     // COMMENTS
 
 
-    app.post("/api/comments", async (req, res) => {
+    app.post("/api/comments", verifyToken, async (req, res) => {
       try {
         const { lessonId, userId, userName, userPhoto, text } = req.body;
 
@@ -881,7 +881,7 @@ async function run() {
     // REPORTS
     // =========================================================
 
-    app.post("/api/lessons/:id/report", async (req, res) => {
+    app.post("/api/lessons/:id/report", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { reporterUserId, reportedUserEmail, reason } = req.body;
@@ -918,7 +918,7 @@ async function run() {
     // USERS
     // =========================================================
 
-    app.get("/api/users/:email", verifyToken,async (req, res) => {
+    app.get("/api/users/:email", verifyToken, async (req, res) => {
       try {
         const email = req.params.email;
         const user = await usersCollection.findOne({ email });
@@ -945,7 +945,7 @@ async function run() {
 
     // Update own profile — only name and image (photo) can be changed here.
     // Email, role, and isPremium are protected and can never be modified through this route.
-    app.patch("/api/users/:id",verifyToken, async (req, res) => {
+    app.patch("/api/users/:id", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         // Accept either "image" or "photoURL" from the client, but always store as "image"
@@ -1016,7 +1016,7 @@ async function run() {
     };
 
     // List all users with their total lessons created — admin only
-    app.get("/api/users", async (req, res) => {
+    app.get("/api/users", verifyToken, async (req, res) => {
       try {
         const { requesterId } = req.query;
 
@@ -1067,13 +1067,9 @@ async function run() {
 
 
 
-    // get one user 
-
-
-
     // Promote/demote a user's role — admin only, and an admin cannot change their own role
     // (prevents accidentally locking yourself out of the admin panel)
-    app.patch("/api/users/:id/role", async (req, res) => {
+    app.patch("/api/users/:id/role",verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { role, requesterId } = req.body;
@@ -1136,7 +1132,7 @@ async function run() {
     });
 
     // Delete a user account — admin only, and an admin cannot delete their own account
-    app.delete("/api/users/:id", async (req, res) => {
+    app.delete("/api/users/:id",verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { requesterId } = req.query;
@@ -1192,7 +1188,7 @@ async function run() {
 
     // List all lessons (any visibility, any creator) with creator name, report
     // count, and overall stats — for the admin Manage Lessons page
-    app.get("/api/admin/lessons", async (req, res) => {
+    app.get("/api/admin/lessons", verifyToken, async (req, res) => {
       try {
         const { requesterId } = req.query;
 
@@ -1281,7 +1277,7 @@ async function run() {
     });
 
     // Ignore all reports on a lesson — clears reports, keeps the lesson live. Admin only.
-    app.patch("/api/admin/lessons/:id/ignore-reports", async (req, res) => {
+    app.patch("/api/admin/lessons/:id/ignore-reports",verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { requesterId } = req.body;
@@ -1330,7 +1326,7 @@ async function run() {
 
     // List only lessons that have at least one report, with title + report count
     // — for the admin Reported / Flagged Lessons page
-    app.get("/api/admin/reported-lessons", async (req, res) => {
+    app.get("/api/admin/reported-lessons", verifyToken, async (req, res) => {
       try {
         const { requesterId } = req.query;
 
@@ -1385,7 +1381,7 @@ async function run() {
 
     // Get all report entries for a single lesson, including reporter name/email
     // — used to populate the "view reasons" modal
-    app.get("/api/admin/lessons/:id/reports", async (req, res) => {
+    app.get("/api/admin/lessons/:id/reports",verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const { requesterId } = req.query;
@@ -1451,7 +1447,7 @@ async function run() {
     // Admin activity summary — platform-wide moderation totals for the admin profile page.
     // The schema doesn't track which specific admin performed each moderation action,
     // so this reflects overall platform moderation activity rather than a per-admin tally.
-    app.get("/api/users/:id/admin-activity", async (req, res) => {
+    app.get("/api/users/:id/admin-activity",verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
 
@@ -1500,7 +1496,7 @@ async function run() {
 
     // Admin dashboard overview — platform-wide stats, top contributors,
     // today's new lessons, and 30-day lesson/user growth chart data
-    app.get("/api/admin/dashboard-overview", async (req, res) => {
+    app.get("/api/admin/dashboard-overview", verifyToken, async (req, res) => {
       try {
         const { requesterId } = req.query;
 
@@ -1630,43 +1626,10 @@ async function run() {
 
     // Profile stats — total lessons created, total favorites saved, and
     // all public lessons created by this user (newest first) for the profile grid
-    // app.get("/api/users/:id/profile-stats", async (req, res) => {
-    //   try {
-    //     const { id } = req.params;
-
-    //     const lessonsCreatedCount = await lessonsCollection.countDocuments({
-    //       creatorId: id,
-    //     });
-
-    //     const favoritesSavedCount = await favoritesCollection.countDocuments(
-    //       { userId: id }
-    //     );
 
 
-    //     const publicLessons = await lessonsCollection
-    //       .find({ creatorId: id, visibility: "Public" })
-    //       .sort({ createdAt: -1 })
-    //       .toArray();
 
-    //     res.status(200).send({
-    //       success: true,
-    //       data: {
-    //         lessonsCreatedCount,
-    //         favoritesSavedCount,
-    //         publicLessons,
-    //       },
-    //     });
-    //   } catch (error) {
-    //     console.error("Fetch profile stats error:", error);
-    //     res.status(500).send({
-    //       success: false,
-    //       message: "Failed to fetch profile stats",
-    //     });
-    //   }
-    // });
-
-
-    app.get("/api/users/:id/profile-stats", async (req, res) => {
+    app.get("/api/users/:id/profile-stats", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
 
@@ -1713,7 +1676,7 @@ async function run() {
 
     // Dashboard overview — counts, recently added lessons, and a 7-day
     // activity chart dataset (lessons created per day) for the user dashboard home
-    app.get("/api/users/:id/dashboard-overview", async (req, res) => {
+    app.get("/api/users/:id/dashboard-overview", verifyToken, async (req, res) => {
       try {
         // Make sure this endpoint is never cached by the browser/CDN —
         // stale cached JSON is a common reason numbers look "stuck"
